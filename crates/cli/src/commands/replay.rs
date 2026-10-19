@@ -1,14 +1,10 @@
-//! `prism replay` — Launch interactive TUI debugger.
-
 use clap::Args;
-use prism_core::types::config::NetworkConfig;
+use grat_core::network::NetworkConfig;
 
 #[derive(Args)]
 pub struct ReplayArgs {
-    /// Transaction hash to replay interactively.
     pub tx_hash: String,
 
-    /// Enable interactive mode (TUI).
     #[arg(long, short)]
     pub interactive: bool,
 }
@@ -55,7 +51,7 @@ pub async fn run(
         if !*quiet {
             println!("Use --interactive / -i to launch the TUI debugger.");
             println!(
-                "Or use `prism trace {}` for non-interactive trace output.",
+                "Or use `grat trace {}` for non-interactive trace output.",
                 args.tx_hash
             );
         }

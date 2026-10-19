@@ -1,5 +1,3 @@
-//! `prism login` and `prism logout` — Manage API credentials for hosted services.
-
 use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use dialoguer::Select;
@@ -8,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Arguments for the auth command.
 #[derive(Args)]
 pub struct AuthArgs {
     #[command(subcommand)]
@@ -17,43 +14,28 @@ pub struct AuthArgs {
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
-    /// Store API credentials for a provider.
     Login {
-        /// Provider name (Blockdaemon, NowNodes, or custom).
         #[arg(long)]
         provider: Option<String>,
 
-        /// Override the default config file location.
         #[arg(long)]
         config_path: Option<String>,
     },
-    /// Remove stored API credentials for a provider.
+
     Logout {
-        /// Provider name to remove credentials for.
         #[arg(long)]
         provider: Option<String>,
 
-        /// Override the default config file location.
         #[arg(long)]
         config_path: Option<String>,
     },
 }
 
-/// Configuration file structure for credential storage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct AuthConfig {
     credentials: std::collections::HashMap<String, String>,
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            credentials: std::collections::HashMap::new(),
-        }
-    }
-}
-
-/// Execute the auth command.
 pub async fn run(args: AuthArgs, output_format: &str) -> Result<()> {
     match args.command {
         AuthCommands::Login {
@@ -67,7 +49,6 @@ pub async fn run(args: AuthArgs, output_format: &str) -> Result<()> {
     }
 }
 
-/// Handle the login subcommand.
 async fn login(
     provider_param: Option<String>,
     config_path: Option<String>,
@@ -75,13 +56,11 @@ async fn login(
 ) -> Result<()> {
     let palette = crate::output::theme::ColorPalette::default();
 
-    // Determine provider name
     let provider = match provider_param {
         Some(p) => p,
         None => select_provider_interactive()?,
     };
 
-    // Prompt for API key securely
     let prompt = format!(
         "Enter your API key for {}: ",
         palette.success_text(&provider)
@@ -93,9 +72,8 @@ async fn login(
         std::process::exit(1);
     }
 
-    // Store the credential
     match store_credential(&provider, &api_key, config_path).await {
-        Ok(_) => {
+        Ok(()) => {
             if matches!(
                 crate::output::OutputFormat::parse(output_format),
                 crate::output::OutputFormat::Json
@@ -123,7 +101,6 @@ async fn login(
     Ok(())
 }
 
-/// Handle the logout subcommand.
 async fn logout(
     provider_param: Option<String>,
     config_path: Option<String>,
@@ -131,13 +108,11 @@ async fn logout(
 ) -> Result<()> {
     let palette = crate::output::theme::ColorPalette::default();
 
-    // Determine provider name
     let provider = match provider_param {
         Some(p) => p,
         None => select_provider_for_logout()?,
     };
 
-    // Remove the credential
     match remove_credential(&provider, config_path).await {
         Ok(true) => {
             if matches!(
@@ -186,7 +161,6 @@ async fn logout(
     Ok(())
 }
 
-/// Interactively select a provider from known options.
 fn select_provider_interactive() -> Result<String> {
     let items = vec!["Blockdaemon", "NowNodes", "Custom"];
     let selection = Select::new()
@@ -208,7 +182,6 @@ fn select_provider_interactive() -> Result<String> {
     }
 }
 
-/// Interactively select a provider for logout (including those with stored credentials).
 fn select_provider_for_logout() -> Result<String> {
     let mut items: Vec<String> = vec![
         "Blockdaemon".to_string(),
@@ -216,11 +189,10 @@ fn select_provider_for_logout() -> Result<String> {
         "Custom".to_string(),
     ];
 
-    // Try to load existing credentials to show which providers have stored keys
     if let Ok(config) = load_auth_config(None) {
         for provider in config.credentials.keys() {
             if !items.iter().any(|i| i == provider) {
-                items.push(provider.to_string());
+                items.push(provider.clone());
             }
         }
     }
@@ -240,12 +212,10 @@ fn select_provider_for_logout() -> Result<String> {
                 .interact()?;
             Ok(custom)
         }
-        _ => Ok(items[selection].to_string()),
+        _ => Ok(items[selection].clone()),
     }
 }
 
-/// Store a credential using config file storage.
-/// Note: This is less secure than keyring storage but keyring caused dependency conflicts.
 async fn store_credential(
     provider: &str,
     api_key: &str,
@@ -253,12 +223,9 @@ async fn store_credential(
 ) -> Result<()> {
     let normalized_provider = normalize_provider_name(provider);
 
-    // Store in config file
     store_credential_config(&normalized_provider, api_key, config_path).await
 }
 
-/// Store credential in config file.
-/// Note: This is less secure than keyring storage but keyring caused dependency conflicts.
 async fn store_credential_config(
     provider: &str,
     api_key: &str,
@@ -273,7 +240,6 @@ async fn store_credential_config(
 
     save_auth_config(&config, &config_file).await?;
 
-    // Set secure file permissions on Unix systems
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -285,16 +251,14 @@ async fn store_credential_config(
     Ok(())
 }
 
-/// Remove a credential from config file.
 async fn remove_credential(provider: &str, config_path: Option<String>) -> Result<bool> {
     let normalized_provider = normalize_provider_name(provider);
 
-    // Remove from config file
     let config_file = get_config_path(config_path)?;
     if let Ok(mut config) = load_auth_config(Some(&config_file)) {
         if config
             .credentials
-            .remove(&normalized_provider.to_string())
+            .remove(&normalized_provider.clone())
             .is_some()
         {
             save_auth_config(&config, &config_file).await?;
@@ -305,16 +269,13 @@ async fn remove_credential(provider: &str, config_path: Option<String>) -> Resul
     Ok(false)
 }
 
-/// Retrieve a credential from config file.
 #[allow(dead_code)]
 pub fn get_credential(provider: &str) -> Result<Option<String>> {
     let normalized_provider = normalize_provider_name(provider);
 
-    // Get from config file
     get_credential_config(&normalized_provider)
 }
 
-/// Get credential from config file.
 #[allow(dead_code)]
 fn get_credential_config(provider: &str) -> Result<Option<String>> {
     let config_file = get_config_path(None)?;
@@ -322,15 +283,13 @@ fn get_credential_config(provider: &str) -> Result<Option<String>> {
     Ok(config.credentials.get(provider).cloned())
 }
 
-/// Load auth configuration from file.
 fn load_auth_config(config_file: Option<&PathBuf>) -> Result<AuthConfig> {
     let default_path;
-    let config_file = match config_file {
-        Some(p) => p,
-        None => {
-            default_path = get_config_path(None)?;
-            &default_path
-        }
+    let config_file = if let Some(p) = config_file {
+        p
+    } else {
+        default_path = get_config_path(None)?;
+        &default_path
     };
 
     if !config_file.exists() {
@@ -339,39 +298,35 @@ fn load_auth_config(config_file: Option<&PathBuf>) -> Result<AuthConfig> {
 
     let content = fs::read_to_string(config_file)?;
     let config: AuthConfig =
-        toml::from_str(&content).map_err(|e| anyhow!("Failed to parse config file: {}", e))?;
+        toml::from_str(&content).map_err(|e| anyhow!("Failed to parse config file: {e}"))?;
 
     Ok(config)
 }
 
-/// Save auth configuration to file.
 async fn save_auth_config(config: &AuthConfig, config_file: &PathBuf) -> Result<()> {
-    // Create parent directory if it doesn't exist
     if let Some(parent) = config_file.parent() {
         fs::create_dir_all(parent)?;
     }
 
     let content =
-        toml::to_string_pretty(config).map_err(|e| anyhow!("Failed to serialize config: {}", e))?;
+        toml::to_string_pretty(config).map_err(|e| anyhow!("Failed to serialize config: {e}"))?;
 
-    fs::write(config_file, content).map_err(|e| anyhow!("Failed to write config file: {}", e))?;
+    fs::write(config_file, content).map_err(|e| anyhow!("Failed to write config file: {e}"))?;
 
     Ok(())
 }
 
-/// Get the config file path.
 fn get_config_path(override_path: Option<String>) -> Result<PathBuf> {
     if let Some(path) = override_path {
         return Ok(PathBuf::from(path));
     }
 
-    let project_dirs = directories::ProjectDirs::from("dev", "prism", "prism")
+    let project_dirs = directories::ProjectDirs::from("dev", "grat", "grat")
         .ok_or_else(|| anyhow!("Could not determine config directory"))?;
 
     Ok(project_dirs.config_dir().join("auth.toml"))
 }
 
-/// Normalize provider name for storage (lowercase, spaces to hyphens).
 fn normalize_provider_name(provider: &str) -> String {
     provider.to_lowercase().replace(' ', "-")
 }
@@ -399,7 +354,6 @@ mod tests {
         let provider = "test-provider";
         let api_key = "test-api-key-123";
 
-        // Store credential
         let mut config = AuthConfig::default();
         config
             .credentials
@@ -408,14 +362,12 @@ mod tests {
         let content = toml::to_string_pretty(&config).unwrap();
         fs::write(&config_path, content).unwrap();
 
-        // Retrieve credential from the same temp config file
         let loaded = load_auth_config(Some(&config_path)).unwrap();
         assert_eq!(loaded.credentials.get(provider), Some(&api_key.to_string()));
     }
 
     #[test]
     fn test_empty_key_is_rejected() {
-        // This test verifies the validation logic
         let empty_key = "";
         assert!(empty_key.trim().is_empty());
 
@@ -447,11 +399,9 @@ mod tests {
             .credentials
             .insert("test".to_string(), "key123".to_string());
 
-        // Save config
         save_auth_config(&config, &config_path).await.unwrap();
         assert!(config_path.exists());
 
-        // Load config
         let loaded = load_auth_config(Some(&config_path)).unwrap();
         assert_eq!(loaded.credentials.get("test"), Some(&"key123".to_string()));
     }

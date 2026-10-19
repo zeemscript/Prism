@@ -1,8 +1,5 @@
-//! TUI application entry point.
+use grat_core::types::config::NetworkConfig;
 
-use prism_core::types::config::NetworkConfig;
-
-/// Launch the interactive TUI debugger.
 pub async fn launch(tx_hash: &str, network: &NetworkConfig) -> anyhow::Result<()> {
     let state = crate::tui::state::TuiState {
         tx_hash: tx_hash.to_string(),
@@ -21,7 +18,6 @@ pub async fn launch(tx_hash: &str, network: &NetworkConfig) -> anyhow::Result<()
             crate::tui::state::Panel::Controls => crate::tui::widgets::controls::render(),
         }
     }
-    // TODO: Initialize ratatui terminal, run event loop
     println!(
         "TUI debugger launching for {} on {:?}...",
         state.tx_hash, network.network

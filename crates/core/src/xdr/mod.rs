@@ -1,3 +1,4 @@
-//! XDR encoding/decoding utilities for Stellar types.
-
+pub mod cmp;
 pub mod codec;
+#[cfg(feature = "decode")]
+pub mod diff;

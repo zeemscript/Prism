@@ -1,55 +1,26 @@
-//! Prism CLI — Soroban Transaction Debugger
-//!
-//! Usage:
-//!   prism decode <tx-hash>       — Decode a transaction error
-//!   prism inspect <tx-hash>      — Full transaction context
-//!   prism trace <tx-hash>        — Replay and trace execution
-//!   prism profile <tx-hash>      — Resource consumption profile
-//!   prism diff <tx-hash>         — State diff (before/after)
-//!   prism replay <tx-hash> -i    — Interactive TUI debugger
-//!   prism whatif <tx-hash>       — Re-simulate with modifications
-//!   prism export <tx-hash>       — Export as regression test
-//!   prism db update              — Update taxonomy database
-//!   prism clean                  — Clear local cache data
-
-//! Prism CLI — Soroban Transaction Debugger
-//!
-//! Usage:
-//!   prism decode <tx-hash>       — Decode a transaction error
-//!   prism inspect <tx-hash>      — Full transaction context
-//!   prism trace <tx-hash>        — Replay and trace execution
-//!   prism profile <tx-hash>      — Resource consumption profile
-//!   prism diff <tx-hash>         — State diff (before/after)
-//!   prism replay <tx-hash> -i    — Interactive TUI debugger
-//!   prism whatif <tx-hash>       — Re-simulate with modifications
-//!   prism export <tx-hash>       — Export as regression test
-//!   prism db update              — Update taxonomy database
-//!   prism serve                  — Start WebSocket server for streaming trace updates
-//!   prism clean                  — Clear local cache data
-
 mod commands;
 mod config;
 mod output;
 mod tui;
+mod ui;
 mod version_check;
 
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
+use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-const BUILD_HASH: &str = env!("PRISM_BUILD_HASH");
+const BUILD_HASH: &str = env!("GRAT_BUILD_HASH");
 
-/// Prism — From cryptic error to root cause in one command.
 #[derive(Parser)]
-#[command(name = "prism", version = env!("CARGO_PKG_VERSION"), about, long_about = None)]
+#[command(name = "grat", version = env!("CARGO_PKG_VERSION"), about, long_about = None)]
 #[command(propagate_version = true)]
+#[command(before_help = ui::logo::GRAT_LOGO)]
 struct Cli {
-    /// Subcommand to execute.
     #[command(subcommand)]
     command: Commands,
 
-    /// Output format: human, json, compact, or short.
     #[arg(
         long,
         default_value = "human",
@@ -58,72 +29,84 @@ struct Cli {
     )]
     output: String,
 
-    /// Network: mainnet, testnet, futurenet, or a custom RPC URL.
     #[arg(long, short, default_value = "testnet", global = true)]
     network: String,
 
-    /// Enable verbose logging. Repeat for more detail.
     #[arg(long, short, action = ArgAction::Count, global = true)]
     verbose: u8,
 
-    /// Override RPC URL (e.g. http://localhost:8000)
     #[arg(long, global = true, value_parser = validate_url)]
     rpc_url: Option<String>,
 
-    /// Save analysis output as JSON to the specified file path.
     #[arg(long, global = true, value_name = "PATH")]
     save: Option<String>,
 
-    /// Suppress non-essential output.
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Path to a custom config file (overrides ~/.grat/config.toml)"
+    )]
+    config_path: Option<PathBuf>,
+
     #[arg(long, short, global = true)]
     quiet: bool,
 
-    /// Disable ANSI colors in terminal output.
     #[arg(long, global = true)]
     no_color: bool,
+
+    #[arg(long, global = true, help = "Disable network requests for updates")]
+    offline: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Bypass local cache and always fetch live network data"
+    )]
+    no_cache: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    // --- Analysis Commands ---
     #[command(next_help_heading = "Analysis Commands")]
-    /// Decode a transaction error into plain English.
     Decode(commands::decode::DecodeArgs),
-    /// Inspect full transaction context.
+
+    Batch(commands::batch::BatchArgs),
+
     Inspect(commands::inspect::InspectArgs),
-    /// Replay transaction and output execution trace.
+
     Trace(commands::trace::TraceArgs),
-    /// Generate resource consumption profile.
+
     Profile(commands::profile::ProfileArgs),
-    /// Show state diff (before/after) for a transaction.
+
     Diff(commands::diff::DiffArgs),
 
-    // --- Debug & TUI Commands ---
     #[command(next_help_heading = "Debug & TUI Commands")]
-    /// Launch interactive TUI debugger.
     Replay(commands::replay::ReplayArgs),
-    /// Re-simulate with modified inputs.
+
     Whatif(commands::whatif::WhatifArgs),
-    /// Export debug session as a regression test.
+
     Export(commands::export::ExportArgs),
 
-    // --- System & Data Commands ---
     #[command(next_help_heading = "System & Data Commands")]
-    /// Manage the error taxonomy database.
     Db(commands::db::DbArgs),
-    /// Clear local cache data.
+
     Clean(commands::clean::CleanArgs),
-    /// Manage API credentials for hosted services.
+
     Auth(commands::auth::AuthArgs),
-    /// Run health and connectivity diagnostics.
+
     Diagnostic(commands::diagnostic::DiagnosticArgs),
-    /// Generate shell completion scripts.
+
+    #[command(next_help_heading = "System & Data Commands")]
+    History,
+
     Completions {
-        /// The shell to generate completions for.
         shell: clap_complete::Shell,
     },
-    /// Start the instrumentation server.
+
     Serve(commands::serve::ServeArgs),
+
+    SearchError(commands::search_error::SearchErrorArgs),
 }
 
 #[tokio::main]
@@ -133,7 +116,10 @@ async fn main() -> anyhow::Result<()> {
     let version: &'static str = Box::leak(build_version().into_boxed_str());
     let matches = Cli::command().version(version).get_matches();
     let cli = Cli::from_arg_matches(&matches)?;
-    let loaded_config = config::ConfigManager::new()
+
+    let _taxonomy_update_handle =
+        tokio::spawn(grat_core::taxonomy::updater::check_and_update(cli.offline));
+    let loaded_config = config::ConfigManager::new(cli.config_path.clone())
         .and_then(|manager| manager.load())
         .ok();
 
@@ -156,10 +142,11 @@ async fn main() -> anyhow::Result<()> {
 
     output::theme::set_color_enabled(!cli.no_color);
 
-    let mut network = prism_core::network::config::resolve_network(&cli.network);
+    let mut network = grat_core::network::config::resolve_network(&cli.network);
     if let Some(ref rpc_url) = cli.rpc_url {
         network.rpc_url = rpc_url.clone();
     }
+    network.no_cache = cli.no_cache;
 
     tracing::debug!(
         resolved_network = ?network.network,
@@ -172,26 +159,29 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Decode(args) => commands::decode::run(args, &network, &cli.output, save).await?,
+        Commands::Batch(args) => commands::batch::run(args, &network).await?,
         Commands::Inspect(args) => {
-            commands::inspect::run(args, &network, &cli.output, save).await?
+            commands::inspect::run(args, &network, &cli.output, save).await?;
         }
         Commands::Trace(args) => commands::trace::run(args, &network, &cli.output, save).await?,
         Commands::Profile(args) => {
-            commands::profile::run(args, &network, &cli.output, save).await?
+            commands::profile::run(args, &network, &cli.output, save).await?;
         }
         Commands::Diff(args) => commands::diff::run(args, &network, &cli.output, save).await?,
         Commands::Replay(args) => {
-            commands::replay::run(args, &network, &cli.output, &cli.quiet).await?
+            commands::replay::run(args, &network, &cli.output, &cli.quiet).await?;
         }
         Commands::Whatif(args) => commands::whatif::run(args, &network, &cli.output, save).await?,
         Commands::Export(args) => {
-            commands::export::run(args, &network, &cli.output, &cli.quiet).await?
+            commands::export::run(args, &network, &cli.output, &cli.quiet).await?;
         }
         Commands::Clean(args) => commands::clean::run(args, &cli.output).await?,
         Commands::Db(args) => commands::db::run(args, &cli.output).await?,
         Commands::Auth(args) => commands::auth::run(args, &cli.output).await?,
         Commands::Diagnostic(args) => commands::diagnostic::run(args).await?,
+        Commands::History => commands::history::run(&cli.output).await?,
         Commands::Serve(args) => commands::serve::run(args, &network).await?,
+        Commands::SearchError(args) => commands::search_error::run(args).await?,
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let name = cmd.get_name().to_string();
@@ -204,15 +194,16 @@ async fn main() -> anyhow::Result<()> {
 
 fn build_version() -> String {
     format!(
-        "prism {} (build: {}) | Soroban Protocol: {}",
-        prism_core::VERSION,
+        "{}\ngrat {} (build: {}) | Soroban Protocol: {}",
+        ui::logo::GRAT_LOGO,
+        grat_core::VERSION,
         BUILD_HASH,
-        prism_core::SOROBAN_PROTOCOL_VERSION
+        grat_core::SOROBAN_PROTOCOL_VERSION
     )
 }
 
 fn build_log_filter(verbose: u8) -> EnvFilter {
-    let prism_level = match verbose {
+    let grat_level = match verbose {
         0 => LevelFilter::WARN,
         1 => LevelFilter::DEBUG,
         _ => LevelFilter::TRACE,
@@ -222,12 +213,12 @@ fn build_log_filter(verbose: u8) -> EnvFilter {
         .with_default_directive(LevelFilter::WARN.into())
         .parse_lossy("")
         .add_directive(
-            format!("prism={prism_level}")
+            format!("grat={grat_level}")
                 .parse()
                 .expect("valid directive"),
         )
         .add_directive(
-            format!("prism_core={prism_level}")
+            format!("grat_core={grat_level}")
                 .parse()
                 .expect("valid directive"),
         )
@@ -245,36 +236,36 @@ mod tests {
 
     #[test]
     fn parses_short_verbose_flag() {
-        let cli = Cli::try_parse_from(["prism", "-v", "db", "update"]).expect("cli should parse");
+        let cli = Cli::try_parse_from(["grat", "-v", "db", "update"]).expect("cli should parse");
         assert_eq!(cli.verbose, 1);
     }
 
     #[test]
     fn parses_repeated_verbose_flags_as_trace() {
-        let cli = Cli::try_parse_from(["prism", "-vv", "db", "update"]).expect("cli should parse");
+        let cli = Cli::try_parse_from(["grat", "-vv", "db", "update"]).expect("cli should parse");
         assert_eq!(cli.verbose, 2);
         assert!(build_log_filter(cli.verbose)
             .to_string()
-            .contains("prism=trace"));
+            .contains("grat=trace"));
     }
 
     #[test]
     fn parses_long_verbose_flag_after_subcommand() {
-        let cli = Cli::try_parse_from(["prism", "decode", "--verbose", &"a".repeat(64)])
+        let cli = Cli::try_parse_from(["grat", "decode", "--verbose", &"a".repeat(64)])
             .expect("cli should parse");
         assert_eq!(cli.verbose, 1);
     }
 
     #[test]
     fn parses_short_output_alias() {
-        let cli = Cli::try_parse_from(["prism", "--output", "short", "decode", "abc123"])
+        let cli = Cli::try_parse_from(["grat", "--output", "short", "decode", "abc123"])
             .expect("cli should parse");
         assert_eq!(cli.output, "short");
     }
 
     #[test]
     fn parses_trace_tx_hash_as_positional_argument() {
-        let cli = Cli::try_parse_from(["prism", "trace", "abc123"]).expect("cli should parse");
+        let cli = Cli::try_parse_from(["grat", "trace", "abc123"]).expect("cli should parse");
 
         match cli.command {
             Commands::Trace(args) => {
@@ -287,7 +278,7 @@ mod tests {
 
     #[test]
     fn parses_trace_output_file_flag_with_positional_tx_hash() {
-        let cli = Cli::try_parse_from(["prism", "trace", "abc123", "--output-file", "trace.json"])
+        let cli = Cli::try_parse_from(["grat", "trace", "abc123", "--output-file", "trace.json"])
             .expect("cli should parse");
 
         match cli.command {
@@ -301,7 +292,7 @@ mod tests {
 
     #[test]
     fn parses_diff_tx_hash_argument() {
-        let cli = Cli::try_parse_from(["prism", "diff", "deadbeef"]).expect("cli should parse");
+        let cli = Cli::try_parse_from(["grat", "diff", "deadbeef"]).expect("cli should parse");
 
         match cli.command {
             Commands::Diff(args) => assert_eq!(args.tx_hash, "deadbeef"),
@@ -312,23 +303,45 @@ mod tests {
     #[test]
     fn parses_save_flag_for_trace() {
         let tx_hash = "a".repeat(64);
-        let cli = Cli::try_parse_from(["prism", "--save", "report.json", "trace", &tx_hash])
+        let cli = Cli::try_parse_from(["grat", "--save", "report.json", "trace", &tx_hash])
             .expect("cli should parse with --save");
         assert_eq!(cli.save.as_deref(), Some("report.json"));
     }
 
     #[test]
     fn save_flag_absent_by_default() {
-        let cli = Cli::try_parse_from(["prism", "db", "update"]).expect("cli should parse");
+        let cli = Cli::try_parse_from(["grat", "db", "update"]).expect("cli should parse");
         assert!(cli.save.is_none());
     }
 
     #[test]
     fn save_flag_can_appear_after_subcommand() {
         let tx_hash = "a".repeat(64);
-        let cli = Cli::try_parse_from(["prism", "trace", &tx_hash, "--save", "out.json"])
+        let cli = Cli::try_parse_from(["grat", "trace", &tx_hash, "--save", "out.json"])
             .expect("--save after subcommand should parse");
         assert_eq!(cli.save.as_deref(), Some("out.json"));
+    }
+
+    #[test]
+    fn parses_config_path_flag() {
+        let cli = Cli::try_parse_from([
+            "grat",
+            "--config-path",
+            "/tmp/custom_config.toml",
+            "decode",
+            "abc123",
+        ])
+        .expect("cli should parse with --config-path");
+        assert_eq!(
+            cli.config_path,
+            Some(PathBuf::from("/tmp/custom_config.toml"))
+        );
+    }
+
+    #[test]
+    fn config_path_absent_by_default() {
+        let cli = Cli::try_parse_from(["grat", "db", "update"]).expect("cli should parse");
+        assert!(cli.config_path.is_none());
     }
 
     #[test]
@@ -337,18 +350,31 @@ mod tests {
         let debug = build_log_filter(1).to_string();
         let trace = build_log_filter(2).to_string();
 
-        assert!(warn.contains("prism=warn"));
-        assert!(debug.contains("prism=debug"));
-        assert!(trace.contains("prism=trace"));
-        assert!(trace.contains("prism_core=trace"));
+        assert!(warn.contains("grat=warn"));
+        assert!(debug.contains("grat=debug"));
+        assert!(trace.contains("grat=trace"));
+        assert!(trace.contains("grat_core=trace"));
     }
 
     #[test]
     fn version_string_includes_build_hash_and_protocol() {
         let version = build_version();
 
-        assert!(version.contains(prism_core::VERSION));
+        assert!(version.contains(grat_core::VERSION));
         assert!(version.contains(BUILD_HASH));
-        assert!(version.contains(&prism_core::SOROBAN_PROTOCOL_VERSION.to_string()));
+        assert!(version.contains(&grat_core::SOROBAN_PROTOCOL_VERSION.to_string()));
+    }
+
+    #[test]
+    fn parses_no_cache_flag_on_decode() {
+        let cli = Cli::try_parse_from(["grat", "decode", "abc123", "--no-cache"])
+            .expect("cli should parse with --no-cache");
+        assert!(cli.no_cache);
+    }
+
+    #[test]
+    fn no_cache_absent_by_default() {
+        let cli = Cli::try_parse_from(["grat", "decode", "abc123"]).expect("cli should parse");
+        assert!(!cli.no_cache);
     }
 }

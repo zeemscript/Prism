@@ -1,23 +1,17 @@
-//! `prism trace` — Replay transaction and output execution trace.
-
 use clap::Args;
-use prism_core::types::config::NetworkConfig;
+use grat_core::types::config::NetworkConfig;
 
 #[derive(Args)]
 pub struct TraceArgs {
-    /// Transaction hash to trace.
     #[arg(index = 1, value_name = "TX_HASH")]
     pub tx_hash: String,
 
-    /// Output trace to a file instead of stdout.
     #[arg(long, short)]
     pub output_file: Option<String>,
 
-    /// Show authorization tree view.
     #[arg(long)]
     pub auth: bool,
 
-    /// Show only authorization structure.
     #[arg(long)]
     pub auth_only: bool,
 }
@@ -32,7 +26,7 @@ pub async fn run(
     progress.set_message("Reconstructing state and replaying transaction...");
     progress.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let trace = prism_core::replay::replay_transaction(&args.tx_hash, network).await?;
+    let trace = grat_core::replay::replay_transaction(&args.tx_hash, network).await?;
 
     progress.finish_and_clear();
 
@@ -56,7 +50,7 @@ pub async fn run(
     if let Some(path) = save {
         let json = serde_json::to_string_pretty(&trace)?;
         std::fs::write(path, &json)
-            .map_err(|e| anyhow::anyhow!("Failed to write save file '{}': {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to write save file '{path}': {e}"))?;
         eprintln!("Saved trace to {path}");
     }
     Ok(())

@@ -1,11 +1,8 @@
-//! `prism profile` - Resource consumption profile with hotspot analysis.
-
 use clap::Args;
-use prism_core::types::config::NetworkConfig;
+use grat_core::types::config::NetworkConfig;
 
 #[derive(Args)]
 pub struct ProfileArgs {
-    /// Transaction hash to profile.
     pub tx_hash: String,
 }
 
@@ -19,7 +16,7 @@ pub async fn run(
     progress.set_message("Replaying transaction for resource profiling...");
     progress.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let trace = prism_core::replay::replay_transaction(&args.tx_hash, network).await?;
+    let trace = grat_core::replay::replay_transaction(&args.tx_hash, network).await?;
 
     progress.finish_and_clear();
 
@@ -28,7 +25,7 @@ pub async fn run(
     if let Some(path) = save {
         let json = serde_json::to_string_pretty(&trace.resource_profile)?;
         std::fs::write(path, &json)
-            .map_err(|e| anyhow::anyhow!("Failed to write save file '{}': {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to write save file '{path}': {e}"))?;
         eprintln!("Saved profile to {path}");
     }
 
